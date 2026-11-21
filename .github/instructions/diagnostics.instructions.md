@@ -23,12 +23,13 @@ TO_REDACT = {
     "refresh_token",
 }
 
+
 async def async_get_config_entry_diagnostics(
     hass: HomeAssistant,
     entry: ConfigEntry,
 ) -> dict[str, Any]:
     """Return diagnostics for a config entry."""
-    coordinator: IntegrationBlueprintDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id].coordinator
+    coordinator: SonioxDataUpdateCoordinator = hass.data[DOMAIN][entry.entry_id].coordinator
 
     return {
         "entry_data": async_redact_data(entry.data, TO_REDACT),

@@ -40,7 +40,7 @@ Report any errors found. Fix critical issues before proceeding.
 
 **Entity Organization:**
 
-- [ ] Entities inherit from both platform base and `IntegrationBlueprintEntity`
+- [ ] Entities inherit from both platform base and `SonioxEntity`
 - [ ] `_attr_has_entity_name = True` for all new entities (MANDATORY 2025)
 - [ ] Entity names use `translation_key` instead of hardcoded `name`
 - [ ] Entity IDs are stable (won't change on restart)
@@ -76,6 +76,7 @@ async def async_setup_entry(
 ) -> bool:
     """Set up integration."""
 
+
 # ❌ Bad - Missing types
 async def async_setup_entry(hass, entry):
     """Set up integration."""
@@ -110,6 +111,7 @@ async with aiohttp.ClientSession() as session:
 
 # ❌ Bad - Blocking I/O or deprecated timeout
 import async_timeout  # DEPRECATED - use asyncio.timeout()
+
 time.sleep(5)
 requests.get(url)
 ```
@@ -123,7 +125,7 @@ requests.get(url)
 
 **Naming Conventions:**
 
-- [ ] Classes use `PascalCase` with `IntegrationBlueprint` prefix
+- [ ] Classes use `PascalCase` with `Soniox` prefix
 - [ ] Functions and variables use `snake_case`
 - [ ] Constants use `UPPER_SNAKE_CASE`
 - [ ] Private members have `_leading_underscore`
@@ -358,8 +360,8 @@ Create report in `.ai-scratch/review-report.md`:
 
 ## Integration Context
 
-- **Domain:** `ha_integration_domain`
-- **Class prefix:** `IntegrationBlueprint`
+- **Domain:** `soniox`
+- **Class prefix:** `Soniox`
 - **Instructions:** `.github/instructions/*.instructions.md`
 - **Guidelines:** `AGENTS.md`, `CONTRIBUTING.md`
 
