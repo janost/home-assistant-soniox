@@ -22,7 +22,13 @@ Forked from [greimela/home-assistant-soniox-stt](https://github.com/greimela/hom
 
 ## Installation
 
-### HACS
+### Marketplace (Home Assistant 2026.11 and newer)
+
+1. **Settings** → **Marketplace** → **Add from link**.
+2. Add `https://github.com/janost/home-assistant-soniox`. If asked for a type, choose **Integration**.
+3. Install **Soniox** and restart Home Assistant.
+
+### HACS (Home Assistant 2026.10)
 
 1. In HACS, open the menu and choose **Custom repositories**.
 2. Add `https://github.com/janost/home-assistant-soniox` as type **Integration**.
