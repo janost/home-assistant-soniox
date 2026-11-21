@@ -38,7 +38,6 @@
       "missing_permission": "The API key is missing a permission Soniox needs for this integration. Allow model listing, real-time speech-to-text and text-to-speech for the key in the Soniox Console."
     },
     "abort": {
-      "single_instance_allowed": "Soniox is already configured.",
       "reauth_successful": "Re-authentication was successful.",
       "reconfigure_successful": "Reconfiguration was successful."
     }

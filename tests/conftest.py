@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+from pathlib import Path
 from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
@@ -23,11 +24,18 @@ def auto_enable_custom_integrations(enable_custom_integrations: None) -> None:
     """Load integrations from custom_components in every test."""
 
 
+@pytest.fixture(autouse=True)
+def tts_cache_dir(tmp_path: Path) -> Generator[None]:
+    """Keep HA's TTS file cache per test; the default lives in the shared testing config."""
+    with patch("homeassistant.components.tts.DEFAULT_CACHE_DIR", str(tmp_path / "tts")):
+        yield
+
+
 @pytest.fixture
 def catalog() -> SonioxCatalog:
     """Model catalog returned by the mocked client."""
     return SonioxCatalog(
-        stt=SttCatalog(model="stt-rt-v6", languages={"en": "English", "de": "German"}),
+        stt=SttCatalog(model="stt-rt-v6", languages={"en": "English", "de": "German"}, strict_language_hints=True),
         tts=TtsCatalog(
             model="tts-rt-v2",
             languages={"en": "English", "de": "German"},

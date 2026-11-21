@@ -21,20 +21,19 @@ custom_components/soniox/
 
 ## Speech-to-text
 
-Assist streams 16 kHz mono PCM. `async_transcribe` opens the realtime STT websocket, sends the config, forwards audio, then sends an empty frame to mark the end. Final tokens are joined into the transcript. Audio sending and event receiving run as two tasks; a failure in either stops both.
+Assist streams 16 kHz mono PCM. `async_transcribe` opens the realtime STT websocket, sends the config, forwards audio, then sends an empty frame to mark the end. Final tokens are joined into the transcript; an empty transcript is returned as a success so the pipeline reports "no text recognized". `language_hints_strict` is only sent if the model supports it. Audio sending and event receiving run as two tasks; a failure in either stops both.
 
 ## Text-to-speech
 
 The entity implements only `async_stream_tts_audio`. Home Assistant routes every request through it, wrapping plain `tts.speak` messages in a one-item stream. Output is MP3.
 
-`_TtsSession` in `api/client.py` runs one websocket:
+`_TtsSession` in `api/client.py` speaks the text through consecutive Soniox streams on one websocket, one stream at a time:
 
 - A reader task copies the text source into a queue, so the sender can wait on it with a timeout without cancelling the source.
-- The sender opens a Soniox stream on the first text. If no text arrives for `TTS_IDLE_SECONDS`, it sends `text_end`; the next text opens a new stream on the same connection. Soniox terminates streams that get no text for a few seconds, which happens when an LLM pauses for a tool call. Keepalives go out while no stream is open.
-- The generator yields audio from all streams in order and returns once the source is done and every opened stream reported `terminated`. A connection closed before that is an error, not a short success.
-- If the text source fails, the open stream is cancelled and the original error is raised.
-
-Text longer than the 5000 character message limit is split.
+- The sender opens a stream on the first non-blank text. It ends the stream with `text_end` after `TTS_IDLE_SECONDS` without text (Soniox terminates streams that get no text for a few seconds, e.g. while an LLM runs a tool) or once the stream holds `TTS_MAX_STREAM_CHARS` (Soniox caps a stream at 2 minutes of audio), cutting at a sentence end or whitespace. The next stream opens only after the previous one terminated, so audio never interleaves and at most one Soniox stream is active.
+- While no stream is open the sender sends keepalives. A source that stays silent for `TTS_MAX_IDLE_SECONDS` is abandoned, so a cancelled pipeline does not hold a connection forever.
+- The receiver reads events only while a stream is active, with a `RECEIVE_TIMEOUT_SECONDS` limit per message, and forwards audio. A connection closed before the stream terminated is an error, not a short success.
+- `run` yields the audio and re-raises the first task failure. Errors raised by the text source itself (and by the STT audio source) pass through unchanged instead of being mapped to Soniox errors.
 
 ## Errors
 

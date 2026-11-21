@@ -11,12 +11,12 @@ Forked from [greimela/home-assistant-soniox-stt](https://github.com/greimela/hom
 - Built-in voices plus any voices you cloned in your Soniox project.
 - Speaking rate per request (`speed`, 0.7 to 1.3).
 - Region selection: United States, European Union, Japan or India.
-- A pause in the LLM reply (for example while it runs a tool) does not cut off the speech.
+- Long messages and pauses in the LLM reply (for example while it runs a tool) do not cut off the speech.
 - Configured entirely in the UI.
 
 ## Requirements
 
-- Home Assistant 2026.10.4 or newer
+- Home Assistant 2026.10.0 or newer
 - A Soniox project and its API key. Keys are bound to the region of their project, so pick the matching region during setup.
 - The key needs model listing, real-time speech-to-text and real-time text-to-speech permissions. Cloned voices show up only if the key may list them.
 

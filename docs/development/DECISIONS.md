@@ -6,9 +6,11 @@ The Soniox SDK's realtime clients call `websockets.connect` without an SSL conte
 
 Revisit if the SDK accepts an `ssl` argument.
 
-## Only streaming TTS, rotating Soniox streams on pauses
+## Only streaming TTS, spoken through sequential Soniox streams
 
-Home Assistant sends every request through `async_stream_tts_audio` once an entity implements it, so there is no separate one-shot path. Soniox ends a stream that gets no text for a few seconds without `text_end`, and keepalives do not prevent that. Assist starts streaming TTS exactly when an LLM reply is followed by a tool call, so the client ends the stream after `TTS_IDLE_SECONDS` of silence and opens a new one when text resumes. The MP3 output of consecutive streams is concatenated.
+Home Assistant sends every request through `async_stream_tts_audio` once an entity implements it, so there is no separate one-shot path.
+
+Soniox limits a stream in two ways: it terminates a stream that gets no text for a few seconds without `text_end` (keepalives do not help), and it caps each stream at 2 minutes of audio. Assist starts streaming TTS once an LLM reply passes 60 characters or is followed by a tool call, so pauses are common. The client therefore ends a stream after a short pause or a length budget and continues in a new stream on the same connection. Streams run strictly one after another, which keeps the MP3 output in order and stays within the concurrent stream limit. The MP3 output of consecutive streams is concatenated.
 
 ## No speech-to-text language option
 

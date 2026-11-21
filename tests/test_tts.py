@@ -9,6 +9,7 @@ from unittest.mock import MagicMock
 import pytest
 
 from custom_components.soniox.api import SonioxAuthenticationError, SonioxRequestError
+from homeassistant.components import tts
 from homeassistant.components.tts import TextToSpeechEntity
 from homeassistant.components.tts.const import DATA_COMPONENT
 from homeassistant.components.tts.entity import TTSAudioRequest
@@ -109,3 +110,18 @@ async def test_rejected_key_starts_reauth(hass: HomeAssistant, mock_client: Magi
     await hass.async_block_till_done()
 
     assert [flow["context"]["source"] for flow in hass.config_entries.flow.async_progress()] == [SOURCE_REAUTH]
+
+
+async def test_tts_speak_path_through_home_assistant(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    """A plain message goes through HA's TTS manager, option validation and the stream entry point."""
+    stream = FakeStream(b"mp3-1", b"mp3-2")
+    mock_client.async_synthesize_stream = stream
+
+    result = tts.async_create_stream(hass, TTS_ENTITY_ID, language="de", options={"voice": "Maya", "speed": 0.9})
+    result.async_set_message("Hallo Welt")
+    audio = b"".join([chunk async for chunk in result.async_stream_result()])
+
+    assert audio == b"mp3-1mp3-2"
+    assert result.extension == "mp3"
+    assert stream.text == ["Hallo Welt"]
+    assert stream.kwargs == {"model": "tts-rt-v2", "language": "de", "voice": "Maya", "speed": 0.9}

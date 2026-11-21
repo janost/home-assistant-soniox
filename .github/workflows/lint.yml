@@ -15,6 +15,12 @@ permissions: {}
 # - lint.yml
 # - validate.yml (if added in the future)
 
+# Home Assistant version used for linting and tests. Must match the version
+# pinned by pytest-homeassistant-custom-component in requirements_test.txt.
+# hacs.json holds the minimum version users need, which can be lower.
+env:
+  HA_VERSION: "2026.10.4"
+
 jobs:
   ruff:
     name: "Ruff, Pyright, pytest"
@@ -38,7 +44,6 @@ jobs:
       - name: Get Home Assistant version
         id: ha_version
         run: |
-          HA_VERSION=$(grep '"homeassistant"' hacs.json | head -1 | sed 's/.*"homeassistant"\s*:\s*"\([^"]*\)".*/\1/')
           echo "HA_VERSION=${HA_VERSION}" >> $GITHUB_OUTPUT
           echo "Home Assistant version: ${HA_VERSION}"
 

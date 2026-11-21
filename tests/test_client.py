@@ -28,11 +28,14 @@ from custom_components.soniox.api import (
     SonioxCommunicationError,
     SonioxPermissionError,
     SonioxRequestError,
+    SttCatalog,
 )
 from custom_components.soniox.api.client import SonioxEndpoints
 from custom_components.soniox.const import Region
 
 SSL_CONTEXT = ssl.create_default_context()
+STT = SttCatalog(model="stt-rt-v6", languages={"en": "English"}, strict_language_hints=True)
+CLIENT_MODULE = "custom_components.soniox.api.client"
 CLOSE = object()
 
 type Reply = dict[str, Any] | object
@@ -53,10 +56,13 @@ class FakeWebSocket:
     async def __aexit__(self, *exc_info: object) -> None:
         return None
 
+    def push(self, *replies: Reply) -> None:
+        for reply in replies:
+            self._inbox.put_nowait(reply)
+
     async def send(self, message: str | bytes) -> None:
         self.sent.append(message)
-        for reply in self._respond(message):
-            self._inbox.put_nowait(reply)
+        self.push(*self._respond(message))
 
     async def recv(self) -> str:
         reply = await self._inbox.get()
@@ -68,30 +74,56 @@ class FakeWebSocket:
         return [json.loads(message) for message in self.sent if isinstance(message, str) and message]
 
 
+class TtsServer:
+    """Fake Soniox TTS server.
+
+    On `text_end` it answers with one audio chunk holding the stream's text,
+    then terminates the stream. Streams listed in `hold` (by open order) stay
+    active until `finish` is called. Opening a stream while another is active
+    is counted in `overlaps`.
+    """
+
+    def __init__(self, *, hold: tuple[int, ...] = (), close_early: bool = False) -> None:
+        self.websocket = FakeWebSocket(self._respond)
+        self.order: list[str] = []
+        self.texts: dict[str, str] = {}
+        self.active: set[str] = set()
+        self.overlaps = 0
+        self.keepalives = 0
+        self.text_end_seen = asyncio.Event()
+        self._hold = hold
+        self._close_early = close_early
+
+    def finish(self, stream_id: str) -> None:
+        self.active.discard(stream_id)
+        audio = base64.b64encode(self.texts[stream_id].encode()).decode()
+        self.websocket.push({"stream_id": stream_id, "audio": audio}, {"stream_id": stream_id, "terminated": True})
+
+    def _respond(self, message: str | bytes) -> list[Reply]:
+        payload = json.loads(message)
+        if payload.get("keep_alive"):
+            self.keepalives += 1
+            return []
+        stream_id = payload["stream_id"]
+        if "voice" in payload:
+            self.overlaps += bool(self.active)
+            self.active.add(stream_id)
+            self.order.append(stream_id)
+            self.texts[stream_id] = ""
+            return []
+        self.texts[stream_id] += payload["text"]
+        if payload["text_end"]:
+            self.text_end_seen.set()
+            if self._close_early:
+                return [CLOSE]
+            if self.order.index(stream_id) not in self._hold:
+                self.finish(stream_id)
+        return []
+
+
 def on_audio_end(*replies: Reply) -> Responder:
     """STT server: reply once the client signals end of audio."""
     return lambda message: list(replies) if message == "" else []
-
-
-def tts_server(*, close_early: bool = False) -> Responder:
-    """TTS server: on `text_end`, send one audio chunk per stream (its text) and terminate it."""
-    texts: dict[str, str] = {}
-
-    def respond(message: str | bytes) -> list[Reply]:
-        payload = json.loads(message)
-        stream_id = payload.get("stream_id")
-        if "text" in payload:
-            texts[stream_id] = texts.get(stream_id, "") + payload["text"]
-        if payload.get("text_end"):
-            if close_early:
-                return [CLOSE]
-            audio = base64.b64encode(texts[stream_id].encode()).decode()
-            return [{"stream_id": stream_id, "audio": audio}, {"stream_id": stream_id, "terminated": True}]
-        if payload.get("cancel"):
-            return [{"stream_id": stream_id, "terminated": True}]
-        return []
-
-    return respond
 
 
 @pytest.fixture
@@ -101,8 +133,15 @@ def client() -> SonioxApiClient:
 
 @pytest.fixture
 def connect() -> Generator[MagicMock]:
-    with patch("custom_components.soniox.api.client.connect") as mock_connect:
+    with patch(f"{CLIENT_MODULE}.connect") as mock_connect:
         yield mock_connect
+
+
+@pytest.fixture
+def server(connect: MagicMock) -> TtsServer:
+    tts_server = TtsServer()
+    connect.return_value = tts_server.websocket
+    return tts_server
 
 
 async def _chunks[T](*items: T) -> AsyncIterator[T]:
@@ -110,9 +149,17 @@ async def _chunks[T](*items: T) -> AsyncIterator[T]:
         yield item
 
 
-async def _synthesize(client: SonioxApiClient, text: AsyncIterator[str], **kwargs: Any) -> list[bytes]:
+async def _forever() -> None:
+    await asyncio.Event().wait()
+
+
+def _synthesize_stream(client: SonioxApiClient, text: AsyncIterator[str], **kwargs: Any) -> AsyncIterator[bytes]:
     options = {"model": "tts-rt-v2", "language": "en", "voice": "Maya", "speed": None} | kwargs
-    return [chunk async for chunk in client.async_synthesize_stream(text, **options)]
+    return client.async_synthesize_stream(text, **options)
+
+
+async def _synthesize(client: SonioxApiClient, text: AsyncIterator[str], **kwargs: Any) -> list[bytes]:
+    return [chunk async for chunk in _synthesize_stream(client, text, **kwargs)]
 
 
 def test_endpoints_per_region() -> None:
@@ -128,6 +175,9 @@ def test_endpoints_per_region() -> None:
     )
 
 
+# Speech-to-text
+
+
 async def test_transcribe(client: SonioxApiClient, connect: MagicMock) -> None:
     websocket = FakeWebSocket(
         on_audio_end(
@@ -140,7 +190,7 @@ async def test_transcribe(client: SonioxApiClient, connect: MagicMock) -> None:
     )
     connect.return_value = websocket
 
-    transcript = await client.async_transcribe(_chunks(b"\x01", b"", b"\x02"), model="stt-rt-v6", language="de")
+    transcript = await client.async_transcribe(_chunks(b"\x01", b"", b"\x02"), catalog=STT, language="de")
 
     assert transcript == "Turn on the lights"
     assert connect.call_args.args == ("wss://stt-rt.eu.soniox.com/transcribe-websocket",)
@@ -158,6 +208,15 @@ async def test_transcribe(client: SonioxApiClient, connect: MagicMock) -> None:
     assert websocket.sent[1:] == [b"\x01", b"\x02", ""]
 
 
+async def test_transcribe_without_strict_hint_support(client: SonioxApiClient, connect: MagicMock) -> None:
+    websocket = FakeWebSocket(on_audio_end({"finished": True}))
+    connect.return_value = websocket
+    catalog = SttCatalog(model="stt-rt-v5", languages={"en": "English"}, strict_language_hints=False)
+
+    assert await client.async_transcribe(_chunks(b"\x01"), catalog=catalog, language="en") == ""
+    assert "language_hints_strict" not in websocket.sent_json()[0]
+
+
 @pytest.mark.parametrize(
     ("code", "expected"), [(401, SonioxAuthenticationError), (403, SonioxPermissionError), (400, SonioxRequestError)]
 )
@@ -166,115 +225,182 @@ async def test_transcribe_error_event(
 ) -> None:
     connect.return_value = FakeWebSocket(on_audio_end({"error_code": code, "error_message": "Nope"}))
     with pytest.raises(expected, match="Nope"):
-        await client.async_transcribe(_chunks(b"\x01"), model="stt-rt-v6", language="en")
+        await client.async_transcribe(_chunks(b"\x01"), catalog=STT, language="en")
 
 
 async def test_transcribe_closed_before_finished(client: SonioxApiClient, connect: MagicMock) -> None:
     connect.return_value = FakeWebSocket(on_audio_end({"tokens": [{"text": "Turn", "is_final": True}]}, CLOSE))
     with pytest.raises(SonioxCommunicationError):
-        await client.async_transcribe(_chunks(b"\x01"), model="stt-rt-v6", language="en")
+        await client.async_transcribe(_chunks(b"\x01"), catalog=STT, language="en")
 
 
 async def test_handshake_rejected(client: SonioxApiClient, connect: MagicMock) -> None:
     connect.side_effect = InvalidStatus(Response(401, "Unauthorized", Headers()))
     with pytest.raises(SonioxAuthenticationError):
-        await client.async_transcribe(_chunks(b"\x01"), model="stt-rt-v6", language="en")
+        await client.async_transcribe(_chunks(b"\x01"), catalog=STT, language="en")
 
 
-async def test_audio_source_failure_stops_transcription(client: SonioxApiClient, connect: MagicMock) -> None:
+@pytest.mark.parametrize("error", [RuntimeError("microphone gone"), TimeoutError("no audio")])
+async def test_audio_source_error_propagates_unchanged(
+    client: SonioxApiClient, connect: MagicMock, error: Exception
+) -> None:
     async def failing_audio() -> AsyncIterator[bytes]:
         yield b"\x01"
-        raise RuntimeError("microphone gone")
+        raise error
 
-    # No reply ever arrives: the failure must not wait for the server.
+    # No reply ever arrives: the failure must not wait for the server, and a
+    # TimeoutError from the source must not turn into a Soniox error.
     connect.return_value = FakeWebSocket(lambda message: [])
-    with pytest.raises(RuntimeError, match="microphone gone"):
-        await client.async_transcribe(failing_audio(), model="stt-rt-v6", language="en")
+    with pytest.raises(type(error)) as caught:
+        await client.async_transcribe(failing_audio(), catalog=STT, language="en")
+    assert caught.value is error
 
 
-async def test_synthesize_stream(client: SonioxApiClient, connect: MagicMock) -> None:
-    websocket = FakeWebSocket(tts_server())
-    connect.return_value = websocket
+# Text-to-speech
 
-    chunks = await _synthesize(client, _chunks("Hel", "", "lo"), speed=1.1)
 
-    assert chunks == [b"Hello"]
+async def test_synthesize_stream(client: SonioxApiClient, server: TtsServer, connect: MagicMock) -> None:
+    chunks = await _synthesize(client, _chunks("Hel", "", "lo", " ", "there"), speed=1.1)
+
+    assert chunks == [b"Hello there"]
     assert connect.call_args.args == ("wss://tts-rt.eu.soniox.com/tts-websocket",)
-    config, *messages = websocket.sent_json()
+    config, *messages = server.websocket.sent_json()
     assert config["voice"] == "Maya"
     assert config["audio_format"] == "mp3"
     assert config["speed"] == 1.1
-    assert [(m["text"], m["text_end"]) for m in messages] == [("Hel", False), ("lo", False), ("", True)]
+    assert [(m["text"], m["text_end"]) for m in messages] == [
+        ("Hel", False),
+        ("lo", False),
+        (" ", False),
+        ("there", False),
+        ("", True),
+    ]
     assert {m["stream_id"] for m in messages} == {config["stream_id"]}
 
 
-async def test_synthesize_rotates_streams_on_pause(
+async def test_pause_rotates_to_next_stream_after_previous_terminated(
     client: SonioxApiClient, connect: MagicMock, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    monkeypatch.setattr("custom_components.soniox.api.client.TTS_IDLE_SECONDS", 0.01)
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_IDLE_SECONDS", 0.01)
+    server = TtsServer(hold=(0,))
+    connect.return_value = server.websocket
 
     async def text_with_tool_call() -> AsyncIterator[str]:
         yield "Let me check. "
-        await asyncio.sleep(0.05)  # LLM runs a tool
+        await server.text_end_seen.wait()  # the pause ended the first stream
         yield "It is sunny."
 
-    websocket = FakeWebSocket(tts_server())
-    connect.return_value = websocket
+    consumer = asyncio.create_task(_synthesize(client, text_with_tool_call()))
+    await server.text_end_seen.wait()
+    for _ in range(20):
+        await asyncio.sleep(0)
+    # The second text is waiting: the first stream is still producing audio.
+    assert len(server.order) == 1
 
-    chunks = await _synthesize(client, text_with_tool_call())
+    server.finish(server.order[0])
 
-    assert chunks == [b"Let me check. ", b"It is sunny."]
-    configs = [m for m in websocket.sent_json() if "voice" in m]
-    assert len(configs) == 2
-    assert configs[0]["stream_id"] != configs[1]["stream_id"]
-
-
-async def test_synthesize_empty_text(client: SonioxApiClient, connect: MagicMock) -> None:
-    websocket = FakeWebSocket(tts_server())
-    connect.return_value = websocket
-
-    assert await _synthesize(client, _chunks("")) == []
-    assert websocket.sent == []
+    assert await consumer == [b"Let me check. ", b"It is sunny."]
+    assert len(server.order) == 2
+    assert server.overlaps == 0
 
 
-async def test_synthesize_splits_long_text(client: SonioxApiClient, connect: MagicMock) -> None:
-    websocket = FakeWebSocket(tts_server())
-    connect.return_value = websocket
+async def test_long_text_rotates_on_length_budget(
+    client: SonioxApiClient, server: TtsServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_MAX_STREAM_CHARS", 20)
+    text = "One two three. Four five six seven eight. " + "x" * 45
 
-    await _synthesize(client, _chunks("x" * 12000))
+    chunks = await _synthesize(client, _chunks(text))
 
-    texts = [m["text"] for m in websocket.sent_json()[1:]]
-    assert [len(text) for text in texts] == [5000, 5000, 2000, 0]
+    assert b"".join(chunks).decode() == text
+    stream_texts = [server.texts[stream_id] for stream_id in server.order]
+    assert stream_texts == ["One two three. ", "Four five six seven ", "eight. " + "x" * 13, "x" * 20, "x" * 12]
+    assert server.overlaps == 0
 
 
-async def test_synthesize_closed_before_terminated(client: SonioxApiClient, connect: MagicMock) -> None:
-    connect.return_value = FakeWebSocket(tts_server(close_early=True))
+async def test_whitespace_alone_opens_no_stream(client: SonioxApiClient, server: TtsServer) -> None:
+    assert await _synthesize(client, _chunks(" ", "")) == []
+    assert server.websocket.sent == []
+
+
+async def test_closed_before_terminated(client: SonioxApiClient, connect: MagicMock) -> None:
+    connect.return_value = TtsServer(close_early=True).websocket
     with pytest.raises(SonioxCommunicationError):
         await _synthesize(client, _chunks("Hello"))
 
 
-async def test_text_source_failure_cancels_stream(client: SonioxApiClient, connect: MagicMock) -> None:
+async def test_silent_text_source_is_abandoned(
+    client: SonioxApiClient, server: TtsServer, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_IDLE_SECONDS", 0.01)
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_KEEPALIVE_SECONDS", 0.01)
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_MAX_IDLE_SECONDS", 0.05)
+
+    async def stalled_text() -> AsyncIterator[str]:
+        yield "Hi"
+        await _forever()  # a cancelled pipeline never ends its text stream
+        yield ""  # pragma: no cover
+
+    with pytest.raises(SonioxCommunicationError, match="No text"):
+        await _synthesize(client, stalled_text())
+    assert server.keepalives >= 1
+
+
+async def test_server_silence_times_out_while_text_is_open(
+    client: SonioxApiClient, connect: MagicMock, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setattr(f"{CLIENT_MODULE}.TTS_IDLE_SECONDS", 0.01)
+    monkeypatch.setattr(f"{CLIENT_MODULE}.RECEIVE_TIMEOUT_SECONDS", 0.05)
+    connect.return_value = TtsServer(hold=(0,)).websocket
+
+    async def open_text() -> AsyncIterator[str]:
+        yield "Hi"
+        await _forever()
+        yield ""  # pragma: no cover
+
+    with pytest.raises(SonioxCommunicationError, match="Timed out"):
+        await _synthesize(client, open_text())
+
+
+@pytest.mark.parametrize("error", [RuntimeError("llm failed"), OSError("llm connection reset")])
+async def test_text_source_error_propagates_unchanged(
+    client: SonioxApiClient, server: TtsServer, error: Exception
+) -> None:
     async def failing_text() -> AsyncIterator[str]:
         yield "Hello"
-        raise RuntimeError("llm failed")
+        raise error
 
-    websocket = FakeWebSocket(tts_server())
-    connect.return_value = websocket
-
-    with pytest.raises(RuntimeError, match="llm failed"):
+    with pytest.raises(type(error)) as caught:
         await _synthesize(client, failing_text())
+    assert caught.value is error
 
-    assert websocket.sent_json()[-1]["cancel"] is True
+
+async def test_error_after_audio(client: SonioxApiClient, connect: MagicMock) -> None:
+    audio = base64.b64encode(b"ab").decode()
+    connect.return_value = FakeWebSocket(
+        lambda message: (
+            [{"stream_id": "s", "audio": audio}, {"stream_id": "s", "error_code": 400, "error_message": "Too long"}]
+            if '"text_end":true' in str(message)
+            else []
+        )
+    )
+    received: list[bytes] = []
+
+    async def collect() -> None:
+        async for chunk in _synthesize_stream(client, _chunks("Hi")):
+            received.append(chunk)  # noqa: PERF401 - keeps chunks seen before the error
+
+    with pytest.raises(SonioxRequestError, match="Too long"):
+        await collect()
+    assert received == [b"ab"]
 
 
-async def test_tts_error_while_text_is_still_arriving(client: SonioxApiClient, connect: MagicMock) -> None:
-    source_done = asyncio.Event()
-
+async def test_error_while_text_is_still_arriving(client: SonioxApiClient, connect: MagicMock) -> None:
     async def endless_text() -> AsyncIterator[str]:
         yield "Hello"
-        await source_done.wait()
+        await _forever()
+        yield ""  # pragma: no cover
 
-    # The server fails the stream as soon as the first text arrives.
     connect.return_value = FakeWebSocket(
         lambda message: (
             [{"error_code": 400, "error_message": "Unknown voice"}] if '"text":"Hello"' in str(message) else []
@@ -284,7 +410,7 @@ async def test_tts_error_while_text_is_still_arriving(client: SonioxApiClient, c
         await _synthesize(client, endless_text())
 
 
-async def test_tts_malformed_message(client: SonioxApiClient, connect: MagicMock) -> None:
+async def test_malformed_audio(client: SonioxApiClient, connect: MagicMock) -> None:
     connect.return_value = FakeWebSocket(
         lambda message: [{"stream_id": "s", "audio": "not base64!"}] if '"text_end":true' in str(message) else []
     )
@@ -292,9 +418,23 @@ async def test_tts_malformed_message(client: SonioxApiClient, connect: MagicMock
         await _synthesize(client, _chunks("Hi"))
 
 
+async def test_consumer_stopping_early_cleans_up(client: SonioxApiClient, server: TtsServer) -> None:
+    stream = _synthesize_stream(client, _chunks("Hi"))
+    assert await anext(stream) == b"Hi"
+
+    await stream.aclose()  # type: ignore[attr-defined]
+
+    leftover = [task for task in asyncio.all_tasks() if "_TtsSession" in repr(task) or "_read_source" in repr(task)]
+    assert leftover == []
+
+
+# Catalog
+
+
 def _model(model_id: str, *, alias: str | None = None, mode: str = "real_time", **extra: Any) -> SimpleNamespace:
     languages = [SimpleNamespace(code="en", name="English")]
-    return SimpleNamespace(id=model_id, aliased_model_id=alias, transcription_mode=mode, languages=languages, **extra)
+    fields = {"supports_language_hints_strict": True} | extra
+    return SimpleNamespace(id=model_id, aliased_model_id=alias, transcription_mode=mode, languages=languages, **fields)
 
 
 def _mock_rest(
@@ -309,9 +449,8 @@ def _mock_rest(
 
 async def test_catalog_prefers_default_models_and_ready_clones(client: SonioxApiClient) -> None:
     tts_model = _model("tts-rt-v2", voices=[SimpleNamespace(id="Maya")], supports_voice_cloning=True)
-    rest = _mock_rest(
-        client, [_model("stt-async-v6", mode="async"), _model("stt-rt-v5"), _model("stt-rt-v6")], [tts_model]
-    )
+    stt_models = [_model("stt-async-v6", mode="async"), _model("stt-rt-v5"), _model("stt-rt-v6")]
+    rest = _mock_rest(client, stt_models, [tts_model])
 
     async def cloned_voices() -> AsyncIterator[SimpleNamespace]:
         yield SimpleNamespace(id="v1", name="Me", models=[SimpleNamespace(model="tts-rt-v2", status="ready")])
@@ -321,8 +460,7 @@ async def test_catalog_prefers_default_models_and_ready_clones(client: SonioxApi
 
     catalog = await client.async_get_catalog()
 
-    assert catalog.stt.model == "stt-rt-v6"
-    assert catalog.stt.languages == {"en": "English"}
+    assert catalog.stt == SttCatalog(model="stt-rt-v6", languages={"en": "English"}, strict_language_hints=True)
     assert catalog.tts is not None
     assert catalog.tts.model == "tts-rt-v2"
     assert catalog.tts.voices == {"Maya": "Maya", "v1": "Me (cloned)"}
@@ -345,11 +483,13 @@ async def test_catalog_without_cloned_voice_permission(client: SonioxApiClient) 
 
 
 async def test_catalog_falls_back_to_newest_model(client: SonioxApiClient) -> None:
-    _mock_rest(client, [_model("stt-rt-v9"), _model("stt-rt-v10"), _model("stt-rt-latest", alias="stt-rt-v10")], [])
+    stt_models = [_model("stt-rt-v9"), _model("stt-rt-v10", supports_language_hints_strict=False)]
+    _mock_rest(client, [*stt_models, _model("stt-rt-latest", alias="stt-rt-v10")], [])
 
     catalog = await client.async_get_catalog()
 
     assert catalog.stt.model == "stt-rt-v10"
+    assert catalog.stt.strict_language_hints is False
     assert catalog.tts is None
 
 

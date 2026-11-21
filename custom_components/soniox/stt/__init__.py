@@ -32,9 +32,8 @@ class SonioxSpeechToTextEntity(SonioxEntity, stt.SpeechToTextEntity):
     def __init__(self, entry: SonioxConfigEntry) -> None:
         """Initialize the entity."""
         super().__init__(entry, "speech_to_text")
-        catalog = entry.runtime_data.catalog.stt
-        self._model = catalog.model
-        self._languages = list(catalog.languages)
+        self._catalog = entry.runtime_data.catalog.stt
+        self._languages = list(self._catalog.languages)
 
     @property
     def supported_languages(self) -> list[str]:
@@ -75,15 +74,16 @@ class SonioxSpeechToTextEntity(SonioxEntity, stt.SpeechToTextEntity):
         metadata: stt.SpeechMetadata,
         stream: AsyncIterable[bytes],
     ) -> stt.SpeechResult:
-        """Transcribe an audio stream with Soniox in the pipeline language."""
+        """Transcribe an audio stream with Soniox in the pipeline language.
+
+        An empty transcript is a success; the pipeline reports it as "no text
+        recognized" rather than as a provider failure.
+        """
         try:
             text = await self._client.async_transcribe(
-                stream, model=self._model, language=base_language(metadata.language)
+                stream, catalog=self._catalog, language=base_language(metadata.language)
             )
         except SonioxError as err:
             self._handle_error(err)
-            return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
-
-        if not text:
             return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
         return stt.SpeechResult(text, stt.SpeechResultState.SUCCESS)

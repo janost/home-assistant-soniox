@@ -48,22 +48,27 @@ async def test_transcribes_in_pipeline_language(hass: HomeAssistant, mock_client
     result = await entity.async_process_audio_stream(metadata, _audio())
 
     assert result == stt.SpeechResult("turn on the lights", stt.SpeechResultState.SUCCESS)
-    assert mock_client.async_transcribe.await_args.kwargs == {"model": "stt-rt-v6", "language": "de"}
+    kwargs = mock_client.async_transcribe.await_args.kwargs
+    assert kwargs["language"] == "de"
+    assert kwargs["catalog"].model == "stt-rt-v6"
 
 
-@pytest.mark.parametrize("outcome", [SonioxRequestError("rejected"), ""])
-async def test_failure_or_empty_transcript_is_error(
-    hass: HomeAssistant, mock_client: MagicMock, outcome: Exception | str
-) -> None:
-    if isinstance(outcome, Exception):
-        mock_client.async_transcribe.side_effect = outcome
-    else:
-        mock_client.async_transcribe.return_value = outcome
+async def test_failure_is_error(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    mock_client.async_transcribe.side_effect = SonioxRequestError("rejected")
 
     result = await _entity(hass).async_process_audio_stream(_metadata("en"), _audio())
 
     assert result == stt.SpeechResult(None, stt.SpeechResultState.ERROR)
     assert not hass.config_entries.flow.async_progress()
+
+
+async def test_empty_transcript_is_success(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    # The pipeline turns an empty success into "no text recognized".
+    mock_client.async_transcribe.return_value = ""
+
+    result = await _entity(hass).async_process_audio_stream(_metadata("en"), _audio())
+
+    assert result == stt.SpeechResult("", stt.SpeechResultState.SUCCESS)
 
 
 async def test_rejected_key_starts_reauth(hass: HomeAssistant, mock_client: MagicMock) -> None:
