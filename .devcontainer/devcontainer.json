@@ -1,6 +1,6 @@
 {
-  "name": "HA ha_integration_domain Dev Container",
-  "image": "mcr.microsoft.com/devcontainers/python:3.13",
+  "name": "Soniox Dev Container",
+  "image": "mcr.microsoft.com/devcontainers/python:3.14",
   "postCreateCommand": "bash .devcontainer/setup-shell.sh && bash .devcontainer/setup-git.sh && script/setup/setup",
   "postAttachCommand": "bash .devcontainer/post-attach.sh",
   "containerEnv": {
@@ -20,7 +20,7 @@
     "APT_UPDATE": "0"
   },
   "features": {
-    "ghcr.io/devcontainers/features/node:1": {
+    "ghcr.io/devcontainers/features/node:2": {
       "version": "lts"
     },
     "ghcr.io/devcontainers/features/github-cli:1": {},
