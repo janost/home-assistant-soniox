@@ -3,12 +3,12 @@
 from __future__ import annotations
 
 from collections.abc import Generator
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import MagicMock, create_autospec, patch
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.soniox.api import SonioxCatalog, SttCatalog, TtsCatalog
+from custom_components.soniox.api import SonioxApiClient, SonioxCatalog, SttCatalog, TtsCatalog
 from custom_components.soniox.const import CONF_REGION, DOMAIN, Region
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
@@ -39,16 +39,14 @@ def catalog() -> SonioxCatalog:
 @pytest.fixture
 def mock_client(catalog: SonioxCatalog) -> Generator[MagicMock]:
     """Replace SonioxApiClient everywhere the integration constructs it."""
-    client = MagicMock()
-    client.async_get_catalog = AsyncMock(return_value=catalog)
-    client.async_close = AsyncMock()
-    client.async_transcribe = AsyncMock(return_value="turn on the lights")
-    client.async_synthesize = AsyncMock(return_value=b"mp3-data")
+    client = create_autospec(SonioxApiClient, instance=True)
+    client.async_get_catalog.return_value = catalog
+    client.async_transcribe.return_value = "turn on the lights"
     with (
         patch("custom_components.soniox.SonioxApiClient", return_value=client) as factory,
         patch("custom_components.soniox.config_flow.SonioxApiClient", new=factory),
     ):
-        client.factory = factory
+        client.factory = factory  # type: ignore[attr-defined]
         yield client
 
 

@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import asdict
 from typing import Any
 
+from homeassistant.config_entries import ConfigEntryState
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.redact import async_redact_data
@@ -15,11 +16,16 @@ TO_REDACT = {CONF_API_KEY}
 
 
 async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: SonioxConfigEntry) -> dict[str, Any]:
-    """Return config entry diagnostics with the API key redacted."""
+    """Return config entry diagnostics with the API key redacted.
+
+    The model catalog is only known while the entry is loaded.
+    """
+    loaded = entry.state is ConfigEntryState.LOADED
     return {
         "entry": {
+            "state": entry.state.value,
             "data": async_redact_data(dict(entry.data), TO_REDACT),
             "options": dict(entry.options),
         },
-        "catalog": asdict(entry.runtime_data.catalog),
+        "catalog": asdict(entry.runtime_data.catalog) if loaded else None,
     }

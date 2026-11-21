@@ -8,8 +8,10 @@ from unittest.mock import MagicMock
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
 from custom_components.soniox.api import SonioxAuthenticationError, SonioxCatalog, SonioxCommunicationError
-from custom_components.soniox.const import DOMAIN
+from custom_components.soniox.const import CONF_REGION, DOMAIN
+from custom_components.soniox.diagnostics import async_get_config_entry_diagnostics
 from homeassistant.config_entries import SOURCE_REAUTH, ConfigEntryState
+from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers import device_registry as dr
 
@@ -46,6 +48,7 @@ async def test_auth_failure_starts_reauth(
     assert config_entry.state is ConfigEntryState.SETUP_ERROR
     flows = hass.config_entries.flow.async_progress()
     assert [flow["context"]["source"] for flow in flows] == [SOURCE_REAUTH]
+    # The client is closed even though setup failed.
     mock_client.async_close.assert_awaited_once()
 
 
@@ -71,3 +74,23 @@ async def test_no_tts_entity_without_tts_model(
 
     assert hass.states.get(STT_ENTITY_ID) is not None
     assert hass.states.get(TTS_ENTITY_ID) is None
+
+
+async def test_diagnostics_redact_key(hass: HomeAssistant, setup_integration: MockConfigEntry) -> None:
+    diagnostics = await async_get_config_entry_diagnostics(hass, setup_integration)
+
+    assert diagnostics["entry"]["data"] == {CONF_API_KEY: "**REDACTED**", CONF_REGION: "eu"}
+    assert diagnostics["catalog"]["stt"]["model"] == "stt-rt-v6"
+
+
+async def test_diagnostics_when_setup_failed(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_client: MagicMock
+) -> None:
+    mock_client.async_get_catalog.side_effect = SonioxCommunicationError("down")
+    config_entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(config_entry.entry_id)
+
+    diagnostics = await async_get_config_entry_diagnostics(hass, config_entry)
+
+    assert diagnostics["entry"]["state"] == "setup_retry"
+    assert diagnostics["catalog"] is None

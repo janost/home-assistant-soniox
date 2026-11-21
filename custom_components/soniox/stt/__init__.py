@@ -6,7 +6,6 @@ from collections.abc import AsyncIterable
 import dataclasses
 
 from custom_components.soniox.api import SonioxError
-from custom_components.soniox.const import AUTO_LANGUAGE, CONF_STT_LANGUAGE, LOGGER
 from custom_components.soniox.data import SonioxConfigEntry
 from custom_components.soniox.entity import SonioxEntity
 from custom_components.soniox.utils import base_language
@@ -35,17 +34,12 @@ class SonioxSpeechToTextEntity(SonioxEntity, stt.SpeechToTextEntity):
         super().__init__(entry, "speech_to_text")
         catalog = entry.runtime_data.catalog.stt
         self._model = catalog.model
-        self._available_languages = list(catalog.languages)
-        self._fixed_language: str | None = entry.options.get(CONF_STT_LANGUAGE, AUTO_LANGUAGE)
-        if self._fixed_language == AUTO_LANGUAGE:
-            self._fixed_language = None
+        self._languages = list(catalog.languages)
 
     @property
     def supported_languages(self) -> list[str]:
         """Return the languages offered to Assist pipelines."""
-        if self._fixed_language is not None:
-            return [self._fixed_language]
-        return self._available_languages
+        return self._languages
 
     @property
     def supported_formats(self) -> list[stt.AudioFormats]:
@@ -81,12 +75,13 @@ class SonioxSpeechToTextEntity(SonioxEntity, stt.SpeechToTextEntity):
         metadata: stt.SpeechMetadata,
         stream: AsyncIterable[bytes],
     ) -> stt.SpeechResult:
-        """Transcribe an audio stream with Soniox."""
-        language = self._fixed_language or base_language(metadata.language)
+        """Transcribe an audio stream with Soniox in the pipeline language."""
         try:
-            text = await self._client.async_transcribe(stream, model=self._model, language=language)
+            text = await self._client.async_transcribe(
+                stream, model=self._model, language=base_language(metadata.language)
+            )
         except SonioxError as err:
-            LOGGER.error("Soniox transcription failed: %s", err)
+            self._handle_error(err)
             return stt.SpeechResult(None, stt.SpeechResultState.ERROR)
 
         if not text:

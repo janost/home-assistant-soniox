@@ -2,21 +2,26 @@
 
 from __future__ import annotations
 
+import dataclasses
 from unittest.mock import MagicMock
 
 import pytest
 from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.soniox.api import SonioxAuthenticationError, SonioxCommunicationError
-from custom_components.soniox.const import CONF_REGION, CONF_STT_LANGUAGE, CONF_TTS_VOICE, DOMAIN, Region
-from homeassistant.components import stt
+from custom_components.soniox.api import (
+    SonioxAuthenticationError,
+    SonioxCatalog,
+    SonioxCommunicationError,
+    SonioxPermissionError,
+)
+from custom_components.soniox.const import CONF_REGION, CONF_TTS_VOICE, DOMAIN, Region
 from homeassistant.components.tts.const import DATA_COMPONENT as TTS_DATA_COMPONENT
 from homeassistant.config_entries import SOURCE_USER
 from homeassistant.const import CONF_API_KEY
 from homeassistant.core import HomeAssistant
 from homeassistant.data_entry_flow import FlowResultType
 
-from .conftest import API_KEY, STT_ENTITY_ID, TTS_ENTITY_ID
+from .conftest import API_KEY, TTS_ENTITY_ID
 
 
 async def test_user_flow_creates_entry_with_region(hass: HomeAssistant, mock_client: MagicMock) -> None:
@@ -34,7 +39,11 @@ async def test_user_flow_creates_entry_with_region(hass: HomeAssistant, mock_cli
 
 @pytest.mark.parametrize(
     ("error", "expected"),
-    [(SonioxAuthenticationError("bad key"), "invalid_auth"), (SonioxCommunicationError("down"), "cannot_connect")],
+    [
+        (SonioxAuthenticationError("bad key"), "invalid_auth"),
+        (SonioxPermissionError("no model listing"), "missing_permission"),
+        (SonioxCommunicationError("down"), "cannot_connect"),
+    ],
 )
 async def test_user_flow_errors_then_recovers(
     hass: HomeAssistant, mock_client: MagicMock, error: Exception, expected: str
@@ -90,17 +99,12 @@ async def test_options_flow(hass: HomeAssistant, setup_integration: MockConfigEn
     result = await hass.config_entries.options.async_init(setup_integration.entry_id)
     assert result["type"] is FlowResultType.FORM
 
-    result = await hass.config_entries.options.async_configure(
-        result["flow_id"], {CONF_STT_LANGUAGE: "de", CONF_TTS_VOICE: "Maya"}
-    )
+    result = await hass.config_entries.options.async_configure(result["flow_id"], {CONF_TTS_VOICE: "Maya"})
     await hass.async_block_till_done()
 
     assert result["type"] is FlowResultType.CREATE_ENTRY
-    assert setup_integration.options == {CONF_STT_LANGUAGE: "de", CONF_TTS_VOICE: "Maya"}
-    # The entry reloaded, so the entities picked up the new options.
-    stt_entity = stt.async_get_speech_to_text_entity(hass, STT_ENTITY_ID)
-    assert stt_entity is not None
-    assert stt_entity.supported_languages == ["de"]
+    assert setup_integration.options == {CONF_TTS_VOICE: "Maya"}
+    # The entry reloaded, so the entity picked up the new default voice.
     tts_entity = hass.data[TTS_DATA_COMPONENT].get_entity(TTS_ENTITY_ID)
     assert tts_entity is not None
     assert tts_entity.default_options == {"voice": "Maya"}
@@ -111,3 +115,16 @@ async def test_options_flow_aborts_when_not_loaded(hass: HomeAssistant, config_e
     result = await hass.config_entries.options.async_init(config_entry.entry_id)
     assert result["type"] is FlowResultType.ABORT
     assert result["reason"] == "not_loaded"
+
+
+async def test_options_flow_aborts_without_tts(
+    hass: HomeAssistant, config_entry: MockConfigEntry, mock_client: MagicMock, catalog: SonioxCatalog
+) -> None:
+    mock_client.async_get_catalog.return_value = dataclasses.replace(catalog, tts=None)
+    config_entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(config_entry.entry_id)
+
+    result = await hass.config_entries.options.async_init(config_entry.entry_id)
+
+    assert result["type"] is FlowResultType.ABORT
+    assert result["reason"] == "no_options"

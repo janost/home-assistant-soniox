@@ -33,13 +33,14 @@
       }
     },
     "error": {
-      "invalid_auth": "[%key:common::config_flow::error::invalid_api_key%]",
-      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]"
+      "invalid_auth": "Soniox rejected the API key. Check that it belongs to a project in the selected region.",
+      "cannot_connect": "Failed to connect to Soniox.",
+      "missing_permission": "The API key is missing a permission Soniox needs for this integration. Allow model listing, real-time speech-to-text and text-to-speech for the key in the Soniox Console."
     },
     "abort": {
-      "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
-      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
-      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+      "single_instance_allowed": "Soniox is already configured.",
+      "reauth_successful": "Re-authentication was successful.",
+      "reconfigure_successful": "Reconfiguration was successful."
     }
   },
   "options": {
@@ -47,17 +48,16 @@
       "init": {
         "title": "Soniox options",
         "data": {
-          "stt_language": "Speech-to-text language",
           "tts_voice": "Default text-to-speech voice"
         },
         "data_description": {
-          "stt_language": "Automatic follows the language of the Assist pipeline. A fixed language restricts recognition to that language.",
           "tts_voice": "Voice used when a request does not pick one."
         }
       }
     },
     "abort": {
-      "not_loaded": "Soniox must be loaded before its options can be changed."
+      "not_loaded": "Soniox must be loaded before its options can be changed.",
+      "no_options": "This API key has no text-to-speech voices, so there is nothing to configure."
     }
   },
   "selector": {

@@ -11,12 +11,14 @@ Forked from [greimela/home-assistant-soniox-stt](https://github.com/greimela/hom
 - Built-in voices plus any voices you cloned in your Soniox project.
 - Speaking rate per request (`speed`, 0.7 to 1.3).
 - Region selection: United States, European Union, Japan or India.
+- A pause in the LLM reply (for example while it runs a tool) does not cut off the speech.
 - Configured entirely in the UI.
 
 ## Requirements
 
 - Home Assistant 2026.10.4 or newer
 - A Soniox project and its API key. Keys are bound to the region of their project, so pick the matching region during setup.
+- The key needs model listing, real-time speech-to-text and real-time text-to-speech permissions. Cloned voices show up only if the key may list them.
 
 ## Installation
 
@@ -42,14 +44,11 @@ This creates one service device with two entities:
 
 Use them in **Settings** → **Voice assistants** by picking Soniox as the speech-to-text and text-to-speech engine of a pipeline.
 
+Speech-to-text always uses the language of the Assist pipeline.
+
 ### Options
 
-**Configure** on the integration offers:
-
-- **Speech-to-text language**: `Automatic` follows the pipeline language. A fixed language restricts recognition to that language.
-- **Default text-to-speech voice**: used when a request does not name a voice.
-
-Change the API key or region with **Reconfigure**.
+**Configure** sets the default text-to-speech voice, used when a request does not name one. Change the API key or region with **Reconfigure**.
 
 ## Automations
 
@@ -73,6 +72,8 @@ data:
 ## Troubleshooting
 
 - **Invalid API key**: the key may belong to a project in another region. Check the region of the project in the Soniox Console.
+- **Missing permission**: allow the permissions listed under Requirements for the key.
+- **Soniox rejects the key while running**: Home Assistant asks for a new key under **Settings** → **Devices & services**.
 - **No text-to-speech entity**: the API key has no access to a Soniox TTS model.
 - Debug logging:
 

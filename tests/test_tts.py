@@ -3,20 +3,40 @@
 from __future__ import annotations
 
 from collections.abc import AsyncGenerator, AsyncIterator
+from typing import Any
 from unittest.mock import MagicMock
 
 import pytest
 
-from custom_components.soniox.api import SonioxRequestError
+from custom_components.soniox.api import SonioxAuthenticationError, SonioxRequestError
 from homeassistant.components.tts import TextToSpeechEntity
 from homeassistant.components.tts.const import DATA_COMPONENT
 from homeassistant.components.tts.entity import TTSAudioRequest
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.core import HomeAssistant
 from homeassistant.exceptions import HomeAssistantError
 
 from .conftest import TTS_ENTITY_ID
 
 pytestmark = pytest.mark.usefixtures("setup_integration")
+
+
+class FakeStream:
+    """Stand-in for `async_synthesize_stream` that records its arguments."""
+
+    def __init__(self, *chunks: bytes, error: Exception | None = None) -> None:
+        self.chunks = chunks
+        self.error = error
+        self.text: list[str] = []
+        self.kwargs: dict[str, Any] = {}
+
+    async def __call__(self, text_stream: AsyncIterator[str], **kwargs: Any) -> AsyncGenerator[bytes]:
+        self.kwargs = kwargs
+        self.text.extend([chunk async for chunk in text_stream])
+        for chunk in self.chunks:
+            yield chunk
+        if self.error is not None:
+            raise self.error
 
 
 def _entity(hass: HomeAssistant) -> TextToSpeechEntity:
@@ -28,6 +48,12 @@ def _entity(hass: HomeAssistant) -> TextToSpeechEntity:
 async def _text(*chunks: str) -> AsyncGenerator[str]:
     for chunk in chunks:
         yield chunk
+
+
+async def _speak(hass: HomeAssistant, options: dict[str, Any], *text: str) -> list[bytes]:
+    response = await _entity(hass).async_stream_tts_audio(TTSAudioRequest("en", options, _text(*text)))
+    assert response.extension == "mp3"
+    return [chunk async for chunk in response.data_gen]
 
 
 async def test_voices_and_defaults(hass: HomeAssistant) -> None:
@@ -42,61 +68,44 @@ async def test_voices_and_defaults(hass: HomeAssistant) -> None:
     assert [voice.voice_id for voice in voices] == ["Adrian", "Maya", "clone-1"]
 
 
-async def test_get_tts_audio_uses_defaults_and_options(hass: HomeAssistant, mock_client: MagicMock) -> None:
-    entity = _entity(hass)
+async def test_stream_uses_defaults(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    stream = FakeStream(b"a", b"b")
+    mock_client.async_synthesize_stream = stream
 
-    assert await entity.async_get_tts_audio("Hello", "en", {}) == ("mp3", b"mp3-data")
-    assert mock_client.async_synthesize.await_args.kwargs == {
-        "model": "tts-rt-v2",
-        "language": "en",
-        "voice": "Adrian",
-        "speed": None,
-    }
+    assert await _speak(hass, {}, "Hel", "lo") == [b"a", b"b"]
+    assert stream.text == ["Hel", "lo"]
+    assert stream.kwargs == {"model": "tts-rt-v2", "language": "en", "voice": "Adrian", "speed": None}
 
-    await entity.async_get_tts_audio("Hallo", "de", {"voice": "Maya", "speed": "1.2"})
-    assert mock_client.async_synthesize.await_args.kwargs["voice"] == "Maya"
-    assert mock_client.async_synthesize.await_args.kwargs["speed"] == 1.2
+
+async def test_stream_passes_voice_and_speed(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    stream = FakeStream(b"a")
+    mock_client.async_synthesize_stream = stream
+
+    await _speak(hass, {"voice": "Maya", "speed": "1.2"}, "Hallo")
+
+    assert stream.kwargs["voice"] == "Maya"
+    assert stream.kwargs["speed"] == 1.2
 
 
 @pytest.mark.parametrize("speed", [2.0, "fast"])
-async def test_invalid_speed_is_rejected(hass: HomeAssistant, mock_client: MagicMock, speed: object) -> None:
+async def test_invalid_speed_is_rejected(hass: HomeAssistant, speed: object) -> None:
     with pytest.raises(HomeAssistantError, match="speed"):
-        await _entity(hass).async_get_tts_audio("Hello", "en", {"speed": speed})
-    mock_client.async_synthesize.assert_not_awaited()
+        await _entity(hass).async_stream_tts_audio(TTSAudioRequest("en", {"speed": speed}, _text("Hi")))
 
 
-async def test_get_tts_audio_error(hass: HomeAssistant, mock_client: MagicMock) -> None:
-    mock_client.async_synthesize.side_effect = SonioxRequestError("rejected")
-    with pytest.raises(HomeAssistantError, match="rejected"):
-        await _entity(hass).async_get_tts_audio("Hello", "en", {})
-
-
-async def test_stream_tts_audio(hass: HomeAssistant, mock_client: MagicMock) -> None:
-    received: list[str] = []
-
-    async def fake_stream(text_stream: AsyncIterator[str], **kwargs: object) -> AsyncIterator[bytes]:
-        received.extend([chunk async for chunk in text_stream])
-        yield b"a"
-        yield b"b"
-
-    mock_client.async_synthesize_stream = fake_stream
-    entity = _entity(hass)
-    assert entity.async_supports_streaming_input()
-
-    response = await entity.async_stream_tts_audio(TTSAudioRequest("en", {}, _text("Hel", "lo")))
-
-    assert response.extension == "mp3"
-    assert [chunk async for chunk in response.data_gen] == [b"a", b"b"]
-    assert received == ["Hel", "lo"]
-
-
-async def test_stream_tts_audio_error(hass: HomeAssistant, mock_client: MagicMock) -> None:
-    async def failing_stream(text_stream: AsyncIterator[str], **kwargs: object) -> AsyncIterator[bytes]:
-        yield b"a"
-        raise SonioxRequestError("boom")
-
-    mock_client.async_synthesize_stream = failing_stream
-    response = await _entity(hass).async_stream_tts_audio(TTSAudioRequest("en", {}, _text("Hi")))
+async def test_stream_error(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    mock_client.async_synthesize_stream = FakeStream(b"a", error=SonioxRequestError("boom"))
 
     with pytest.raises(HomeAssistantError, match="boom"):
-        _ = [chunk async for chunk in response.data_gen]
+        await _speak(hass, {}, "Hi")
+    assert not hass.config_entries.flow.async_progress()
+
+
+async def test_rejected_key_starts_reauth(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    mock_client.async_synthesize_stream = FakeStream(error=SonioxAuthenticationError("revoked"))
+
+    with pytest.raises(HomeAssistantError):
+        await _speak(hass, {}, "Hi")
+    await hass.async_block_till_done()
+
+    assert [flow["context"]["source"] for flow in hass.config_entries.flow.async_progress()] == [SOURCE_REAUTH]

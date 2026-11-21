@@ -6,14 +6,15 @@ from collections.abc import AsyncIterator
 from unittest.mock import MagicMock
 
 import pytest
-from pytest_homeassistant_custom_component.common import MockConfigEntry
 
-from custom_components.soniox.api import SonioxRequestError
-from custom_components.soniox.const import CONF_STT_LANGUAGE
+from custom_components.soniox.api import SonioxAuthenticationError, SonioxRequestError
 from homeassistant.components import stt
+from homeassistant.config_entries import SOURCE_REAUTH
 from homeassistant.core import HomeAssistant
 
 from .conftest import STT_ENTITY_ID
+
+pytestmark = pytest.mark.usefixtures("setup_integration")
 
 
 def _metadata(language: str) -> stt.SpeechMetadata:
@@ -37,12 +38,12 @@ def _entity(hass: HomeAssistant) -> stt.SpeechToTextEntity:
     return entity
 
 
-@pytest.mark.usefixtures("setup_integration")
-async def test_transcribes_with_pipeline_language(hass: HomeAssistant, mock_client: MagicMock) -> None:
+async def test_transcribes_in_pipeline_language(hass: HomeAssistant, mock_client: MagicMock) -> None:
     entity = _entity(hass)
     assert entity.supported_languages == ["en", "de"]
     metadata = _metadata("de-CH")
     assert entity.check_metadata(metadata)
+    assert not entity.check_metadata(_metadata("fr-FR"))
 
     result = await entity.async_process_audio_stream(metadata, _audio())
 
@@ -50,21 +51,6 @@ async def test_transcribes_with_pipeline_language(hass: HomeAssistant, mock_clie
     assert mock_client.async_transcribe.await_args.kwargs == {"model": "stt-rt-v6", "language": "de"}
 
 
-async def test_fixed_language_overrides_pipeline(
-    hass: HomeAssistant, config_entry: MockConfigEntry, mock_client: MagicMock
-) -> None:
-    config_entry.add_to_hass(hass)
-    hass.config_entries.async_update_entry(config_entry, options={CONF_STT_LANGUAGE: "de"})
-    assert await hass.config_entries.async_setup(config_entry.entry_id)
-    entity = _entity(hass)
-
-    assert entity.supported_languages == ["de"]
-    assert not entity.check_metadata(_metadata("en-US"))
-    await entity.async_process_audio_stream(_metadata("de"), _audio())
-    assert mock_client.async_transcribe.await_args.kwargs["language"] == "de"
-
-
-@pytest.mark.usefixtures("setup_integration")
 @pytest.mark.parametrize("outcome", [SonioxRequestError("rejected"), ""])
 async def test_failure_or_empty_transcript_is_error(
     hass: HomeAssistant, mock_client: MagicMock, outcome: Exception | str
@@ -77,3 +63,14 @@ async def test_failure_or_empty_transcript_is_error(
     result = await _entity(hass).async_process_audio_stream(_metadata("en"), _audio())
 
     assert result == stt.SpeechResult(None, stt.SpeechResultState.ERROR)
+    assert not hass.config_entries.flow.async_progress()
+
+
+async def test_rejected_key_starts_reauth(hass: HomeAssistant, mock_client: MagicMock) -> None:
+    mock_client.async_transcribe.side_effect = SonioxAuthenticationError("revoked")
+
+    result = await _entity(hass).async_process_audio_stream(_metadata("en"), _audio())
+    await hass.async_block_till_done()
+
+    assert result.result is stt.SpeechResultState.ERROR
+    assert [flow["context"]["source"] for flow in hass.config_entries.flow.async_progress()] == [SOURCE_REAUTH]

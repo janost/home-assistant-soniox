@@ -5,7 +5,8 @@ from __future__ import annotations
 from homeassistant.helpers.device_registry import DeviceEntryType, DeviceInfo
 from homeassistant.helpers.entity import Entity
 
-from .const import CONSOLE_URL, DOMAIN, TITLE
+from .api import SonioxAuthenticationError, SonioxError
+from .const import CONSOLE_URL, DOMAIN, LOGGER, TITLE
 from .data import SonioxConfigEntry
 
 
@@ -27,3 +28,9 @@ class SonioxEntity(Entity):
             entry_type=DeviceEntryType.SERVICE,
             configuration_url=CONSOLE_URL,
         )
+
+    def _handle_error(self, err: SonioxError) -> None:
+        """Log a failed request and ask for a new API key if Soniox rejected this one."""
+        LOGGER.error("Soniox request failed: %s", err)
+        if isinstance(err, SonioxAuthenticationError):
+            self._entry.async_start_reauth(self.hass)

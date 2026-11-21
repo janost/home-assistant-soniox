@@ -17,7 +17,7 @@ custom_components/soniox/
 
 ## Setup
 
-`async_setup_entry` builds one `SonioxApiClient` for the entry's API key and region and calls `async_get_catalog()`. The catalog holds the chosen STT model and its languages, and the chosen TTS model with its languages and voices. A rejected key raises `ConfigEntryAuthFailed` (starts reauth); other failures raise `ConfigEntryNotReady`. There is no polling: entities read the catalog once and call the client per request.
+`async_setup_entry` builds one `SonioxApiClient` for the entry's API key and region, registers its `async_close` with `entry.async_on_unload`, and calls `async_get_catalog()`. The catalog holds the chosen STT model and its languages, and the chosen TTS model with its languages and voices. A rejected key raises `ConfigEntryAuthFailed` (starts reauth); other failures raise `ConfigEntryNotReady`. There is no polling: entities read the catalog once and call the client per request.
 
 ## Speech-to-text
 
@@ -25,13 +25,17 @@ Assist streams 16 kHz mono PCM. `async_transcribe` opens the realtime STT websoc
 
 ## Text-to-speech
 
-Both paths use the realtime TTS websocket with MP3 output:
+The entity implements only `async_stream_tts_audio`. Home Assistant routes every request through it, wrapping plain `tts.speak` messages in a one-item stream. Output is MP3.
 
-- `async_stream_tts_audio` (Assist) forwards text chunks as the LLM produces them and yields audio as it arrives.
-- `async_get_tts_audio` (`tts.speak`, cache misses) sends the whole message through the same stream and joins the audio.
+`_TtsSession` in `api/client.py` runs one websocket:
 
-Text longer than the 5000 character message limit is split. If the text source fails, the stream is cancelled and the original error is raised.
+- A reader task copies the text source into a queue, so the sender can wait on it with a timeout without cancelling the source.
+- The sender opens a Soniox stream on the first text. If no text arrives for `TTS_IDLE_SECONDS`, it sends `text_end`; the next text opens a new stream on the same connection. Soniox terminates streams that get no text for a few seconds, which happens when an LLM pauses for a tool call. Keepalives go out while no stream is open.
+- The generator yields audio from all streams in order and returns once the source is done and every opened stream reported `terminated`. A connection closed before that is an error, not a short success.
+- If the text source fails, the open stream is cancelled and the original error is raised.
+
+Text longer than the 5000 character message limit is split.
 
 ## Errors
 
-`api/client.py` maps SDK, HTTP and websocket exceptions to `SonioxAuthenticationError`, `SonioxCommunicationError` and `SonioxRequestError`. Entities convert them to Home Assistant results or `HomeAssistantError`.
+`api/client.py` maps SDK, HTTP and websocket exceptions to `SonioxAuthenticationError`, `SonioxCommunicationError` and `SonioxRequestError`. `SonioxPermissionError` is a subclass of `SonioxAuthenticationError`. Entities convert errors to Home Assistant results or `HomeAssistantError`, and start reauth when Soniox rejects the key at runtime.

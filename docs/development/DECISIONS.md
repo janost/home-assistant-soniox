@@ -6,9 +6,13 @@ The Soniox SDK's realtime clients call `websockets.connect` without an SSL conte
 
 Revisit if the SDK accepts an `ssl` argument.
 
-## Use the realtime websocket for one-shot TTS too
+## Only streaming TTS, rotating Soniox streams on pauses
 
-The REST TTS endpoint caps input at 5000 characters. The websocket accepts text in chunks, so one code path covers streaming Assist replies and long `tts.speak` messages.
+Home Assistant sends every request through `async_stream_tts_audio` once an entity implements it, so there is no separate one-shot path. Soniox ends a stream that gets no text for a few seconds without `text_end`, and keepalives do not prevent that. Assist starts streaming TTS exactly when an LLM reply is followed by a tool call, so the client ends the stream after `TTS_IDLE_SECONDS` of silence and opens a new one when text resumes. The MP3 output of consecutive streams is concatenated.
+
+## No speech-to-text language option
+
+Assist pipelines only use an STT engine for languages it lists, and the pipeline language is sent to Soniox as a strict hint. A fixed-language option could only narrow the list without changing what is sent.
 
 ## Domain `soniox` instead of `soniox_stt`
 

@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Any
 
-import probatio as vol
+import probatio
 
 from homeassistant.config_entries import (
     ConfigEntry,
@@ -19,11 +19,9 @@ from homeassistant.core import callback
 from homeassistant.helpers import selector
 from homeassistant.util.ssl import get_default_context
 
-from .api import SonioxApiClient, SonioxAuthenticationError, SonioxError
+from .api import SonioxApiClient, SonioxAuthenticationError, SonioxError, SonioxPermissionError
 from .const import (
-    AUTO_LANGUAGE,
     CONF_REGION,
-    CONF_STT_LANGUAGE,
     CONF_TTS_VOICE,
     CONSOLE_URL,
     DEFAULT_REGION,
@@ -50,6 +48,8 @@ async def _async_validate(api_key: str, region: Region) -> dict[str, str]:
     client = SonioxApiClient(api_key=api_key, region=region, ssl_context=get_default_context())
     try:
         await client.async_get_catalog()
+    except SonioxPermissionError:
+        return {"base": "missing_permission"}
     except SonioxAuthenticationError:
         return {"base": "invalid_auth"}
     except SonioxError as err:
@@ -60,12 +60,12 @@ async def _async_validate(api_key: str, region: Region) -> dict[str, str]:
     return {}
 
 
-def _credentials_schema(region: str) -> vol.Schema:
+def _credentials_schema(region: str) -> probatio.Schema:
     """Return the API key and region form."""
-    return vol.Schema(
+    return probatio.Schema(
         {
-            vol.Required(CONF_API_KEY): API_KEY_SELECTOR,
-            vol.Required(CONF_REGION, default=region): REGION_SELECTOR,
+            probatio.Required(CONF_API_KEY): API_KEY_SELECTOR,
+            probatio.Required(CONF_REGION, default=region): REGION_SELECTOR,
         }
     )
 
@@ -105,14 +105,13 @@ class SonioxConfigFlow(ConfigFlow, domain=DOMAIN):
         entry = self._get_reauth_entry()
         errors: dict[str, str] = {}
         if user_input is not None:
-            region = Region(entry.data.get(CONF_REGION, DEFAULT_REGION))
-            errors = await _async_validate(user_input[CONF_API_KEY], region)
+            errors = await _async_validate(user_input[CONF_API_KEY], Region(entry.data[CONF_REGION]))
             if not errors:
                 return self.async_update_reload_and_abort(entry, data_updates=user_input)
 
         return self.async_show_form(
             step_id="reauth_confirm",
-            data_schema=vol.Schema({vol.Required(CONF_API_KEY): API_KEY_SELECTOR}),
+            data_schema=probatio.Schema({probatio.Required(CONF_API_KEY): API_KEY_SELECTOR}),
             errors=errors,
         )
 
@@ -127,50 +126,39 @@ class SonioxConfigFlow(ConfigFlow, domain=DOMAIN):
 
         return self.async_show_form(
             step_id="reconfigure",
-            data_schema=_credentials_schema(entry.data.get(CONF_REGION, DEFAULT_REGION)),
+            data_schema=_credentials_schema(entry.data[CONF_REGION]),
             errors=errors,
         )
 
 
 class SonioxOptionsFlow(OptionsFlowWithReload):
-    """Choose the STT language and default TTS voice."""
+    """Choose the default TTS voice."""
 
     async def async_step_init(self, user_input: dict[str, Any] | None = None) -> ConfigFlowResult:
         """Show the options form."""
         entry: SonioxConfigEntry = self.config_entry
         if entry.state is not ConfigEntryState.LOADED:
             return self.async_abort(reason="not_loaded")
+        tts = entry.runtime_data.catalog.tts
+        if tts is None or not tts.voices:
+            return self.async_abort(reason="no_options")
 
         if user_input is not None:
             return self.async_create_entry(data=user_input)
 
-        catalog = entry.runtime_data.catalog
-        stt_languages = [
-            selector.SelectOptionDict(value=code, label=f"{name} ({code})")
-            for code, name in sorted(catalog.stt.languages.items(), key=lambda item: item[1])
+        voices = [
+            selector.SelectOptionDict(value=voice_id, label=label)
+            for voice_id, label in sorted(tts.voices.items(), key=lambda item: item[1].casefold())
         ]
-        schema: dict[vol.Marker, Any] = {
-            vol.Required(CONF_STT_LANGUAGE, default=AUTO_LANGUAGE): selector.SelectSelector(
-                selector.SelectSelectorConfig(
-                    options=[
-                        selector.SelectOptionDict(value=AUTO_LANGUAGE, label="Automatic (Assist pipeline language)"),
-                        *stt_languages,
-                    ],
-                    mode=selector.SelectSelectorMode.DROPDOWN,
-                )
-            ),
-        }
-        if catalog.tts is not None and catalog.tts.voices:
-            voices = [
-                selector.SelectOptionDict(value=voice_id, label=label)
-                for voice_id, label in sorted(catalog.tts.voices.items(), key=lambda item: item[1].casefold())
-            ]
-            default_voice = DEFAULT_TTS_VOICE if DEFAULT_TTS_VOICE in catalog.tts.voices else voices[0]["value"]
-            schema[vol.Required(CONF_TTS_VOICE, default=default_voice)] = selector.SelectSelector(
-                selector.SelectSelectorConfig(options=voices, mode=selector.SelectSelectorMode.DROPDOWN)
-            )
-
+        default_voice = DEFAULT_TTS_VOICE if DEFAULT_TTS_VOICE in tts.voices else voices[0]["value"]
+        schema = probatio.Schema(
+            {
+                probatio.Required(CONF_TTS_VOICE, default=default_voice): selector.SelectSelector(
+                    selector.SelectSelectorConfig(options=voices, mode=selector.SelectSelectorMode.DROPDOWN)
+                ),
+            }
+        )
         return self.async_show_form(
             step_id="init",
-            data_schema=self.add_suggested_values_to_schema(vol.Schema(schema), entry.options),
+            data_schema=self.add_suggested_values_to_schema(schema, entry.options),
         )
