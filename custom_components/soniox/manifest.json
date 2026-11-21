@@ -1,0 +1,14 @@
+{
+  "domain": "soniox",
+  "name": "Soniox",
+  "codeowners": ["@janost"],
+  "config_flow": true,
+  "documentation": "https://github.com/janost/home-assistant-soniox",
+  "integration_type": "service",
+  "iot_class": "cloud_push",
+  "issue_tracker": "https://github.com/janost/home-assistant-soniox/issues",
+  "loggers": ["soniox"],
+  "requirements": ["soniox==2.11.0"],
+  "single_config_entry": true,
+  "version": "0.2.0"
+}

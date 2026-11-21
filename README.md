@@ -1,73 +1,87 @@
-# Soniox Speech-to-Text for Home Assistant
+# Soniox for Home Assistant
 
-Custom Home Assistant speech-to-text integration for [Soniox](https://soniox.com/). It plugs into the normal Assist voice pipeline, so you can select it as the speech-to-text engine for your pipeline and choose how language selection should work.
+Custom integration that adds [Soniox](https://soniox.com/) speech-to-text and text-to-speech to Home Assistant.
+
+Forked from [greimela/home-assistant-soniox-stt](https://github.com/greimela/home-assistant-soniox-stt), which only provided speech-to-text.
 
 ## Features
 
-- Uses Soniox as a Home Assistant Assist speech-to-text provider
-- Works with the normal Assist pipeline
-- Supports automatic language handling from the pipeline language
-- Supports locking the integration to one specific language
-- Configured entirely through the Home Assistant UI
+- **Speech-to-text** for Assist pipelines, using Soniox realtime transcription.
+- **Text-to-speech** for Assist pipelines and `tts.speak`. Assist streams LLM responses to Soniox as they are generated, so playback starts before the full reply is written.
+- Built-in voices plus any voices you cloned in your Soniox project.
+- Speaking rate per request (`speed`, 0.7 to 1.3).
+- Region selection: United States, European Union, Japan or India.
+- Configured entirely in the UI.
 
 ## Requirements
 
-- Home Assistant `2025.12.3` or newer
-- A Soniox account
-- A Soniox API key
+- Home Assistant 2026.10.4 or newer
+- A Soniox project and its API key. Keys are bound to the region of their project, so pick the matching region during setup.
 
 ## Installation
 
 ### HACS
 
-1. Open HACS in Home Assistant.
-2. Add this repository as a custom repository if it is not yet listed in HACS by default.
-3. Choose the repository type `Integration`.
-4. Install `Soniox Speech-to-Text`.
-5. Restart Home Assistant.
+1. In HACS, open the menu and choose **Custom repositories**.
+2. Add `https://github.com/janost/home-assistant-soniox` as type **Integration**.
+3. Install **Soniox** and restart Home Assistant.
 
 ### Manual
 
-1. Copy `custom_components/soniox_stt` into your Home Assistant `custom_components` directory.
-2. Restart Home Assistant.
+Copy `custom_components/soniox` into your Home Assistant `custom_components` directory and restart.
 
 ## Setup
 
-1. Open **Settings** → **Devices & Services**.
-2. Click **Add Integration**.
-3. Search for `Soniox Speech-to-Text`.
-4. Enter your Soniox API key.
-5. Choose a language mode:
-   - `Automatic`: use the active Assist pipeline language
-   - A fixed language: always send that language to Soniox
-6. Finish the config flow.
+1. **Settings** → **Devices & services** → **Add integration** → **Soniox**.
+2. Enter the API key and select the region of your Soniox project.
 
-Only one Soniox Speech-to-Text entry is supported.
+This creates one service device with two entities:
 
-## Use with Assist
+- `stt.soniox_speech_to_text`
+- `tts.soniox_text_to_speech`
 
-After the integration is added:
+Use them in **Settings** → **Voice assistants** by picking Soniox as the speech-to-text and text-to-speech engine of a pipeline.
 
-1. Open **Settings** → **Voice Assistants**.
-2. Open the pipeline you want to use.
-3. Set **Speech-to-text** to `Soniox Speech-to-Text`.
-4. Save the pipeline.
+### Options
 
-If you use `Automatic` language mode, the Assist pipeline language determines the language Soniox receives. If you choose a fixed language in the integration options, that language is used for every transcription request.
+**Configure** on the integration offers:
 
-## Changing the Language Later
+- **Speech-to-text language**: `Automatic` follows the pipeline language. A fixed language restricts recognition to that language.
+- **Default text-to-speech voice**: used when a request does not name a voice.
 
-1. Open **Settings** → **Devices & Services**.
-2. Open the `Soniox Speech-to-Text` integration.
-3. Click **Configure**.
-4. Change the language mode.
+Change the API key or region with **Reconfigure**.
+
+## Automations
+
+Speak on a media player:
+
+```yaml
+action: tts.speak
+target:
+  entity_id: tts.soniox_text_to_speech
+data:
+  media_player_entity_id: media_player.living_room
+  message: "The washing machine is done."
+  language: en
+  options:
+    voice: Maya
+    speed: 1.1
+```
+
+`language` and `options` are optional. Without them the Home Assistant language (or English) and the default voice are used.
 
 ## Troubleshooting
 
-- If the integration does not appear in HACS with the right name, refresh HACS metadata and reload the page.
-- If setup fails immediately, verify that your Soniox API key is valid.
-- If Assist cannot use the provider, confirm that your pipeline has `Soniox Speech-to-Text` selected as its speech-to-text engine.
+- **Invalid API key**: the key may belong to a project in another region. Check the region of the project in the Soniox Console.
+- **No text-to-speech entity**: the API key has no access to a Soniox TTS model.
+- Debug logging:
 
-## Development Status
+  ```yaml
+  logger:
+    logs:
+      custom_components.soniox: debug
+  ```
 
-This repository is currently focused on the Assist STT integration only. The original template boilerplate has been removed in favor of a dedicated Soniox implementation.
+## Development
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). `script/setup/bootstrap` creates the environment, `script/check` runs type checks, lint and spelling, `script/test` runs the tests.

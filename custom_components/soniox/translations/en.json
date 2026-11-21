@@ -1,0 +1,85 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "title": "Connect Soniox",
+        "description": "Create an API key in the [Soniox Console]({console_url}). Keys only work in the region of the project they belong to.",
+        "data": {
+          "api_key": "API key",
+          "region": "Region"
+        },
+        "data_description": {
+          "api_key": "API key of your Soniox project.",
+          "region": "Data residency region of the Soniox project."
+        }
+      },
+      "reauth_confirm": {
+        "title": "Reconnect Soniox",
+        "description": "Soniox rejected the stored API key. Enter a new one.",
+        "data": {
+          "api_key": "API key"
+        }
+      },
+      "reconfigure": {
+        "title": "Update Soniox connection",
+        "data": {
+          "api_key": "API key",
+          "region": "Region"
+        },
+        "data_description": {
+          "api_key": "API key of your Soniox project.",
+          "region": "Data residency region of the Soniox project."
+        }
+      }
+    },
+    "error": {
+      "invalid_auth": "[%key:common::config_flow::error::invalid_api_key%]",
+      "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]"
+    },
+    "abort": {
+      "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]",
+      "reauth_successful": "[%key:common::config_flow::abort::reauth_successful%]",
+      "reconfigure_successful": "[%key:common::config_flow::abort::reconfigure_successful%]"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Soniox options",
+        "data": {
+          "stt_language": "Speech-to-text language",
+          "tts_voice": "Default text-to-speech voice"
+        },
+        "data_description": {
+          "stt_language": "Automatic follows the language of the Assist pipeline. A fixed language restricts recognition to that language.",
+          "tts_voice": "Voice used when a request does not pick one."
+        }
+      }
+    },
+    "abort": {
+      "not_loaded": "Soniox must be loaded before its options can be changed."
+    }
+  },
+  "selector": {
+    "region": {
+      "options": {
+        "us": "United States",
+        "eu": "European Union",
+        "jp": "Japan",
+        "in": "India"
+      }
+    }
+  },
+  "entity": {
+    "stt": {
+      "speech_to_text": {
+        "name": "Speech-to-text"
+      }
+    },
+    "tts": {
+      "text_to_speech": {
+        "name": "Text-to-speech"
+      }
+    }
+  }
+}

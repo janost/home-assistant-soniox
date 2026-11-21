@@ -4,7 +4,7 @@ config/*
 
 # Custom components (HACS-installed dependencies and dev symlinks)
 custom_components/*
-!custom_components/soniox_stt/
+!custom_components/soniox/
 
 # Development tool caches and dependency locks
 .ruff_cache/
@@ -51,7 +51,7 @@ webostv.conf
 # Temporary files
 *.db-journal
 *.pid
-tts
+config/tts/
 
 # automatically downloaded dependencies
 deps

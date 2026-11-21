@@ -1,5 +1,5 @@
 {
-  "name": "Soniox Speech-to-Text",
-  "homeassistant": "2025.12.3",
+  "name": "Soniox",
+  "homeassistant": "2026.10.4",
   "hacs": "2.0.5"
 }

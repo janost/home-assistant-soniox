@@ -1,4 +1,4 @@
-"""Runtime data for the Soniox STT integration."""
+"""Runtime data for the Soniox integration."""
 
 from __future__ import annotations
 
@@ -6,15 +6,15 @@ from dataclasses import dataclass
 
 from homeassistant.config_entries import ConfigEntry
 
-from .api import SonioxApiClient
+from .api import SonioxApiClient, SonioxCatalog
 
 
-@dataclass
+@dataclass(slots=True)
 class SonioxRuntimeData:
-    """Runtime data stored on a Soniox config entry."""
+    """Client and model catalog shared by the STT and TTS entities."""
 
     client: SonioxApiClient
-    supported_languages: tuple[str, ...]
+    catalog: SonioxCatalog
 
 
 type SonioxConfigEntry = ConfigEntry[SonioxRuntimeData]

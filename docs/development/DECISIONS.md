@@ -1,137 +1,19 @@
-# Architectural and Design Decisions
+# Decisions
 
-This document records significant architectural and design decisions made during the development of this integration.
+## Open realtime websockets directly instead of through the SDK
 
-## Format
+The Soniox SDK's realtime clients call `websockets.connect` without an SSL context, so `websockets` builds a default one and loads the CA bundle inside the event loop. Home Assistant flags that as a blocking call. The client opens the websockets itself with `homeassistant.util.ssl.get_default_context()` and still uses the SDK's pydantic types to build and parse messages. REST calls go through the SDK with the same context passed as `verify`.
 
-Each decision is documented with:
+Revisit if the SDK accepts an `ssl` argument.
 
-- **Date:** When the decision was made
-- **Context:** Why this decision was necessary
-- **Decision:** What was decided
-- **Rationale:** Why this approach was chosen
-- **Consequences:** Expected impacts and trade-offs
+## Use the realtime websocket for one-shot TTS too
 
----
+The REST TTS endpoint caps input at 5000 characters. The websocket accepts text in chunks, so one code path covers streaming Assist replies and long `tts.speak` messages.
 
-## Decision Log
+## Domain `soniox` instead of `soniox_stt`
 
-### Use DataUpdateCoordinator for All Data Fetching
+The fork covers STT and TTS. A different domain also lets it be installed next to the upstream `soniox_stt` integration. Existing upstream entries do not migrate; set the integration up again.
 
-**Date:** 2025-11-29 (Template initialization)
+## Region is entry data, models are not configurable
 
-**Context:** The integration needs to fetch data from an external API and share it with multiple entities. Home Assistant provides several patterns for this.
-
-**Decision:** Use `DataUpdateCoordinator` from `homeassistant.helpers.update_coordinator` as the central data management component.
-
-**Rationale:**
-
-- Provides built-in support for update intervals and error handling
-- Automatic retry with exponential backoff
-- Shared data access prevents duplicate API calls
-- Standard pattern recommended by Home Assistant
-- Entities automatically become unavailable when coordinator fails
-
-**Consequences:**
-
-- All entities must inherit from `CoordinatorEntity`
-- Single update interval applies to all entities
-- Data is fetched even if no entities are enabled
-- Coordinator manages entity lifecycle and availability
-
----
-
-### Separate API Client from Coordinator
-
-**Date:** 2025-11-29 (Template initialization)
-
-**Context:** The coordinator needs to fetch data, but business logic should be separated from data transport.
-
-**Decision:** Implement API communication in separate `api/client.py` module, coordinator only orchestrates updates.
-
-**Rationale:**
-
-- Separation of concerns: transport vs. orchestration
-- Easier to test API client in isolation
-- Simpler to swap API implementation if needed
-- Clearer error handling boundaries
-
-**Consequences:**
-
-- Additional abstraction layer
-- Coordinator depends on API client
-- API client raises custom exceptions for error translation
-
----
-
-### Platform-Specific Directories
-
-**Date:** 2025-11-29 (Template initialization)
-
-**Context:** Integration supports multiple platforms (sensor, binary_sensor, switch, etc.).
-
-**Decision:** Each platform gets its own directory with individual entity files.
-
-**Rationale:**
-
-- Clear organization as integration grows
-- Easier to find specific entity implementations
-- Supports multiple entities per platform cleanly
-- Follows Home Assistant Core pattern
-
-**Consequences:**
-
-- More files/directories than single-file approach
-- Platform `__init__.py` must import and register entities
-- Slightly more initial setup overhead
-
----
-
-### EntityDescription for Static Metadata
-
-**Date:** 2025-11-29 (Template initialization)
-
-**Context:** Entities have static metadata (name, icon, device class) that doesn't change.
-
-**Decision:** Use `EntityDescription` dataclasses to define static entity metadata.
-
-**Rationale:**
-
-- Declarative and easy to read
-- Type-safe with dataclasses
-- Recommended Home Assistant pattern
-- Separates static configuration from dynamic behavior
-
-**Consequences:**
-
-- Each entity type needs an EntityDescription
-- Dynamic entities need custom handling
-- Static and dynamic properties clearly separated
-
----
-
-## Future Considerations
-
-### State Restoration
-
-**Status:** Not yet implemented
-
-Consider implementing state restoration for switches and configurable settings to maintain state across Home Assistant restarts when the external device is unavailable.
-
-### Multi-Device Support
-
-**Status:** Not yet implemented
-
-Current architecture assumes single device per config entry. If multi-device support is needed, coordinator data structure will need redesign to map device ID → data.
-
-### Polling vs. Push
-
-**Status:** Uses polling
-
-Currently implements polling-based updates. If the API supports webhooks or WebSocket, consider implementing push-based updates for real-time responsiveness.
-
----
-
-## Decision Review
-
-These decisions should be reviewed periodically (suggested: quarterly or when major features are added) to ensure they still serve the integration's needs.
+Soniox API keys only work in their project's region, so the region is chosen with the key and changed through reconfigure. Models default to the current realtime models (`stt-rt-v6`, `tts-rt-v2`) and fall back to the newest model the key can use.
